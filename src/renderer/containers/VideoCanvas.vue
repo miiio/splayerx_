@@ -44,9 +44,10 @@
   </div>
 </template>;
 <script lang="ts">
+import { Realtime, TextMessage } from 'leancloud-realtime/es-latest'
 import { mapGetters, mapActions, mapMutations } from 'vuex';
 import path from 'path';
-import { debounce } from 'lodash';
+import { debounce, throttle } from 'lodash';
 import { windowRectService } from '@/services/window/WindowRectService';
 import { playInfoStorageService } from '@/services/storage/PlayInfoStorageService';
 import { settingStorageService } from '@/services/storage/SettingStorageService';
@@ -81,7 +82,12 @@ export default {
       audioCtx: null,
       gainNode: null,
       enableVideoInfoStore: false, // tag can save video data when quit
-      userId: ''
+      userId: '',
+      // leancloud-realtime 添加以下变量，appId、appKey、server这几个值去leancloud控制台>设置>应用凭证里面找
+      chatRoom: null,
+      appId: '*******************',
+      appKey: '*******************',
+      server: 'https://*******************.***.com', // REST API 服务器地址
     };
   },
   computed: {
@@ -154,6 +160,86 @@ export default {
   },
   mounted() {
     this.userId = randomString(10);
+    const that = this;
+
+    /* 使用leancloud-realtime */
+
+    let client; let room;
+    // 换成你自己的一个房间的 conversation id（这是服务器端生成的），第一次执行代码就会生成，在leancloud控制台>即时通讯>对话下面，复制一个过来即可
+    let roomId = '*************';
+
+    const realtime = new Realtime({
+      appId: this.appId,
+      appKey: this.appKey,
+      server: this.server,
+    });
+
+    realtime.createIMClient(this.userId).then((c) => {
+      console.log('连接成功');
+      client = c;
+      client.on('disconnect', () => {
+        console.log('[disconnect] 服务器连接已断开');
+      });
+      client.on('offline', () => {
+        console.log('[offline] 离线（网络连接已断开）');
+      });
+      client.on('online', () => {
+        console.log('[online] 已恢复在线');
+      });
+      client.on('schedule', (attempt, time) => {
+        console.log(
+          `[schedule] ${
+            time / 1000
+          }s 后进行第 ${
+            attempt + 1
+          } 次重连`,
+        );
+      });
+      client.on('retry', (attempt) => {
+        console.log(`[retry] 正在进行第 ${attempt + 1} 次重连`);
+      });
+      client.on('reconnect', () => {
+        console.log('[reconnect] 重连成功');
+      });
+      client.on('reconnecterror', () => {
+        console.log('[reconnecterror] 重连失败');
+      });
+      // 获取对话
+      return c.getConversation(roomId);
+    })
+      .then((conversation) => {
+        if (conversation) {
+          return conversation;
+        }
+        // 如果服务器端不存在这个 conversation
+        console.log('不存在这个 conversation，创建一个。');
+        return client
+          .createConversation({
+            name: 'LeanCloud-Conversation',
+            // 创建暂态的聊天室（暂态聊天室支持无限人员聊天）
+            transient: true,
+          })
+          .then((conversation) => {
+            console.log('创建新 Room 成功，id 是：', roomId);
+            roomId = conversation.id;
+            return conversation;
+          });
+      })
+      .then(conversation => conversation.join())
+      .then((conversation) => {
+        // 获取聊天历史
+        room = conversation;
+        that.chatRoom = conversation;
+        // 房间接受消息
+        room.on('message', (message) => {
+          const result = JSON.parse(message._lctext);
+          that.resultHandler(result);
+        });
+      })
+      .catch((err) => {
+        console.error(err);
+        console.log(`错误：${err.message}`);
+      });
     this.audioCtx = new AudioContext();
     this.$bus.$on('back-to-landingview', () => {
       if (this.isTranslating) {
@@ -191,10 +277,18 @@ export default {
     this.$bus.$on('toggle-muted', () => {
       this.toggleMute();
     });
+    /* 新代码(控制播放、暂停) */
     this.$bus.$on('toggle-playback', debounce(() => {
+      const controlParam = {
+        user: this.userId,
+        action: this.paused ? 'play' : 'pause',
+        time: videodata.time,
+      };
+      this.sendMessage(controlParam);
       this[this.paused ? 'play' : 'pause']();
       // this.$ga.event('app', 'toggle-playback');
     }, 50, { leading: true }));
+
     this.$bus.$on('next-video', () => {
       if (this.switchingLock) return;
       if (this.nextVideo === undefined && this.duration > 60) { // 非列表循环或单曲循环时，当前播放列表已经播完
@@ -231,11 +325,18 @@ export default {
         this.$bus.$emit('seek', 0);
       }
     });
-    this.$bus.$on('seek', (e: number) => {
+    /* 新代码(控制快进) */
+    this.$bus.$on('seek', throttle((e: number) => {
       // update vuex currentTime to use some where
       this.seekTime = [e];
       this.updateVideoCurrentTime(e);
-    });
+      const controlParam = {
+        user: this.userId,
+        action: 'seek',
+        time: e,
+      };
+      this.sendMessage(controlParam);
+    }, 200, { leading: false }));
     this.$bus.$on('seek-forward', (delta: number) => this.$bus.$emit('seek', videodata.time + Math.abs(delta)));
     this.$bus.$on('seek-backward', (delta: number) => {
       const finalSeekTime = videodata.time - Math.abs(delta);
@@ -279,6 +380,40 @@ export default {
       addTranslateBubbleCallBack: atActions.AUDIO_TRANSLATE_BUBBLE_CALLBACK,
       discardTranslate: atActions.AUDIO_TRANSLATE_DISCARD,
     }),
+    sendMessage(controlParam) {
+      const params = JSON.stringify(controlParam);
+      // 使用socket.io
+      /* this.socket.emit('video-control', params); */
+      // 使用GoEasy
+      /* this.goEasyConnect.publish({
+        channel: this.channel,
+        message: params,
+      }); */
+      // 使用leancloud-realtime
+      if (!this.chatRoom) { return false; }
+      this.chatRoom.send(new TextMessage(params));
+    },
+    resultHandler(result) {
+      switch (result.action) {
+        default:
+          this.pause();
+          break;
+        case 'play':
+          this.seekTime = [result.time];
+          this.updateVideoCurrentTime(result.time);
+          this.play();
+          break;
+        case 'pause':
+          this.seekTime = [result.time];
+          this.updateVideoCurrentTime(result.time);
+          this.pause();
+          break;
+        case 'seek':
+          this.seekTime = [result.time];
+          this.updateVideoCurrentTime(result.time);
+          break;
+      }
+    },
     async onMetaLoaded(event: Event) { // eslint-disable-line complexity
       const target = event.target as HTMLVideoElement;
       this.videoElement = target;
