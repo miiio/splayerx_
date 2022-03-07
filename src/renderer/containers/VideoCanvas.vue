@@ -50,7 +50,7 @@ import { debounce } from 'lodash';
 import { windowRectService } from '@/services/window/WindowRectService';
 import { playInfoStorageService } from '@/services/storage/PlayInfoStorageService';
 import { settingStorageService } from '@/services/storage/SettingStorageService';
-import { generateShortCutImageBy, ShortCut } from '@/libs/utils';
+import { randomString, generateShortCutImageBy, ShortCut } from '@/libs/utils';
 import { Video as videoMutations } from '@/store/mutationTypes';
 import { Video as videoActions, AudioTranslate as atActions } from '@/store/actionTypes';
 import { videodata } from '@/store/video';
@@ -81,6 +81,7 @@ export default {
       audioCtx: null,
       gainNode: null,
       enableVideoInfoStore: false, // tag can save video data when quit
+      userId: ''
     };
   },
   computed: {
@@ -152,6 +153,7 @@ export default {
     this.updatePlayinglistRate({ oldDir: '', newDir: path.dirname(this.originSrc), playingList: this.playingList });
   },
   mounted() {
+    this.userId = randomString(10);
     this.audioCtx = new AudioContext();
     this.$bus.$on('back-to-landingview', () => {
       if (this.isTranslating) {
