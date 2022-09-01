@@ -57,6 +57,7 @@
     "html-to-image": "^0.1.1",
     "iconv-lite": "^0.4.24",
     "idb": "^4.0.3",
+    "leancloud-realtime": "5.0.0-rc.7",
     "lethargy": "^1.0.4",
     "libphonenumber-js": "^1.7.24",
     "lodash": "^4.17.19",

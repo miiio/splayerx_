@@ -441,3 +441,11 @@ export function offListenersExceptWhiteList(bus: any) { // eslint-disable-line
     }
   }
 }
+export function randomString(length: number) {
+  let str = '';
+  // eslint-disable-next-line no-plusplus
+  for (let i = 0; i < length; i++) {
+    str += Math.random().toString(36).substr(2);
+  }
+  return str.substr(0, length);
+}
